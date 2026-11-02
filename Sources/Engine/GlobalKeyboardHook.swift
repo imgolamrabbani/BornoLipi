@@ -27,6 +27,8 @@ public final class GlobalKeyboardHook {
     }
 
     public var onToggleKeymapRequested: (() -> Void)?
+    /// Intercepts local typing inside BornoLipi's Studio window when returned `true`.
+    public var onInterceptStudioKeyDown: ((NSEvent) -> Bool)?
 
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
@@ -124,15 +126,13 @@ public final class GlobalKeyboardHook {
         isHookActive = false
     }
 
-    /// Installs an `NSEvent.addLocalMonitorForEvents` fallback so typing inside BornoLipi's own Studio window
-    /// and pressing `F1` / `Option+K` / `F12` inside BornoLipi works even before Accessibility permission is granted.
+    /// Installs an `NSEvent.addLocalMonitorForEvents` monitor for BornoLipi's own Studio window.
     private func installLocalFallbackMonitor() {
         guard localKeyMonitor == nil else { return }
         localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self = self else { return event }
-            // If the global CGEventTap is already active, it handles all apps (including BornoLipi) uniformly.
-            if self.isHookActive {
-                return event
+            if let studioHandler = self.onInterceptStudioKeyDown, studioHandler(event) {
+                return nil
             }
             if self.handleLocalNSEvent(event) {
                 return nil
@@ -210,7 +210,14 @@ public final class GlobalKeyboardHook {
             return Unmanaged.passUnretained(event)
         }
 
-        // 4. Run BijoyTypingEngine for the active mode
+        // 4. If BornoLipi itself is the active frontmost app (e.g. the user is typing inside BornoLipi Studio),
+        //    let our local `NSEvent` monitor handle it directly so the left pane (Unicode) and right pane (SutonnyMJ)
+        //    each use their appropriate encoding!
+        if NSWorkspace.shared.frontmostApplication?.bundleIdentifier == Bundle.main.bundleIdentifier {
+            return Unmanaged.passUnretained(event)
+        }
+
+        // 5. Run BijoyTypingEngine for the active mode across all external macOS apps (Microsoft Word, Chrome, Notes, etc.)
         let action = BijoyTypingEngine.shared.processKeyDown(macKeyCode: keyCode, isShiftPressed: hasShift)
         switch action {
         case .passThrough:

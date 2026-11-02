@@ -35,6 +35,9 @@ public final class BijoyTypingEngine {
 
     /// Tracks the character length of each emitted output segment so Backspace can unwind cleanly.
     private var emittedHistory: [String] = []
+    /// Tracks whether the previous key in `Bijoy Classic` mode was a pre-base vowel (`d` = `w`, `c` = `‡`/`†`, `Shift+C` = `‰`/`ˆ`)
+    /// that is waiting to jump after the consonant/conjunct cluster.
+    private var pendingClassicPreKar: String = ""
 
     // Unicode-mode state (`delayKey`, `delayTimer`, `delayOut`, `lastDelayOut`, `flagLeft` in `BijoyBayanno.exe`)
     private var delayKey: Bool = false
@@ -59,6 +62,7 @@ public final class BijoyTypingEngine {
     public func resetBuffer() {
         sequenceQueue = " "
         emittedHistory.removeAll()
+        pendingClassicPreKar = ""
         delayKey = false
         delayTimer = 0
         delayOut = ""
@@ -73,8 +77,9 @@ public final class BijoyTypingEngine {
 
     // MARK: - Key Processing Entry Point
 
-    public func processKeyDown(macKeyCode: UInt16, isShiftPressed: Bool) -> KeyTransformationAction {
-        guard currentMode != .english else {
+    public func processKeyDown(macKeyCode: UInt16, isShiftPressed: Bool, overrideMode: TypingMode? = nil) -> KeyTransformationAction {
+        let effectiveMode = overrideMode ?? currentMode
+        guard effectiveMode != .english else {
             return .passThrough
         }
 
@@ -102,7 +107,7 @@ public final class BijoyTypingEngine {
             return .passThrough
         }
 
-        switch currentMode {
+        switch effectiveMode {
         case .english:
             return .passThrough
         case .bijoyClassic:
@@ -126,6 +131,34 @@ public final class BijoyTypingEngine {
             return .passThrough
         }
 
+        // Smart Pre-Base Vowel (`w`, `‡`, `‰`) Handling in Bijoy Classic (`SutonnyMJ`):
+        // Supports BOTH:
+        //  (A) Traditional Bijoy pre-base order (`c` BEFORE `j` -> `†K`)
+        //  (B) Logical/Unicode-style post-base order (`j` THEN `c` -> `†K`, or `j`+`g`+`Shift+N` (`ÿ`) THEN `c` -> `‡ÿ`)!
+        let isPreKarKey = (rawOutput == "w" || rawOutput == "‡" || rawOutput == "‰")
+        if isPreKarKey && !sequenceQueue.hasSuffix("&") {
+            if let trailingConsonant = extractTrailingSutonnyCluster(from: sequenceQueue) {
+                // The user typed a consonant/conjunct FIRST and then pressed `d`/`c`/`Shift+C`!
+                // Check if the consonant was at the start of a word (preceded by `" "` in `sequenceQueue`)
+                let prefixBeforeConsonant = sequenceQueue.dropLast(trailingConsonant.count)
+                let adjustedKar: String
+                if prefixBeforeConsonant.hasSuffix(" ") {
+                    if rawOutput == "‡" { adjustedKar = "†" }
+                    else if rawOutput == "‰" { adjustedKar = "ˆ" }
+                    else { adjustedKar = rawOutput }
+                } else {
+                    adjustedKar = rawOutput
+                }
+                let bsCount = trailingConsonant.utf16.count
+                let reordered = adjustedKar + trailingConsonant
+                sequenceQueue.removeLast(trailingConsonant.count)
+                appendToQueue(reordered)
+                emittedHistory.append(reordered)
+                pendingClassicPreKar = ""
+                return .replace(backspaces: bsCount, insertText: reordered)
+            }
+        }
+
         // Append the newly typed key's raw output to `Que` (up to 20 chars, matching `ReQue` in BijoyBayanno.exe)
         appendToQueue(rawOutput)
 
@@ -135,25 +168,30 @@ public final class BijoyTypingEngine {
             for length in stride(from: maxLen, through: 2, by: -1) {
                 let candidateSeq = String(sequenceQueue.suffix(length))
                 if let jukOut = classicLayout.jukRules[candidateSeq] {
-                    // How many characters were ALREADY sent to the target app before this keystroke?
-                    // Note: If `candidateSeq` begins with `" "` (the initial buffer sentinel before any Space key was pressed)
-                    // and `emittedHistory` is empty, that leading `" "` was never typed onto the screen!
-                    // In that case, strip the leading `" "` from `jukOut` and do not backspace for it.
                     var effectiveOut = jukOut
                     var previouslyTypedCount = max(0, candidateSeq.utf16.count - rawOutput.utf16.count)
                     if candidateSeq.hasPrefix(" ") && emittedHistory.isEmpty && effectiveOut.hasPrefix(" ") {
                         effectiveOut.removeFirst()
                         previouslyTypedCount = max(0, previouslyTypedCount - 1)
                     }
-                    // Replace the matched suffix in `sequenceQueue` with `jukOut` (just like `SendKey` + `ReQue(jukOut)`)
                     sequenceQueue.removeLast(length)
                     appendToQueue(jukOut)
                     emittedHistory.append(effectiveOut)
+                    if isPreKarKey {
+                        pendingClassicPreKar = effectiveOut
+                    } else {
+                        pendingClassicPreKar = ""
+                    }
                     return .replace(backspaces: previouslyTypedCount, insertText: effectiveOut)
                 }
             }
         }
 
+        if isPreKarKey {
+            pendingClassicPreKar = rawOutput
+        } else {
+            pendingClassicPreKar = ""
+        }
         emittedHistory.append(rawOutput)
         return .replace(backspaces: 0, insertText: rawOutput)
     }
@@ -312,6 +350,34 @@ public final class BijoyTypingEngine {
         delayTimer = 0
         delayOut = ""
         lastDelayOut = ""
+    }
+
+    /// Extracts the last emitted SutonnyMJ consonant/conjunct token if the user just typed a consonant or conjunct
+    /// (and not a space, vowel, or punctuation), so post-base `d` (`w`), `c` (`‡`), or `Shift+C` (`‰`) can be placed
+    /// visually before that consonant cluster.
+    private func extractTrailingSutonnyCluster(from queue: String) -> String? {
+        guard let lastEmitted = emittedHistory.last, !lastEmitted.isEmpty else {
+            return nil
+        }
+        let nonConsonantTokens: Set<String> = [
+            " ", "v", "w", "x", "y", "z", "~", "‚", "„", "…", "‡", "†", "‰", "ˆ", "Š",
+            "A", "Av", "B", "C", "D", "E", "F", "G", "H", "I", "J",
+            "&", "|", ",", ".", "-", "Ñ", "Ô", "Ò", "Õ", "Ó",
+            "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
+            "!", "@", "#", "$", "%", "^", "*", "(", ")"
+        ]
+        if nonConsonantTokens.contains(lastEmitted) {
+            return nil
+        }
+        // Also ignore if the consonant already has a vowel sign attached at the end
+        if let lastChar = lastEmitted.last,
+           ["v", "w", "x", "y", "z", "~", "‚", "„", "…", "‡", "†", "‰", "ˆ", "Š"].contains(String(lastChar)) {
+            return nil
+        }
+        guard queue.hasSuffix(lastEmitted) else {
+            return nil
+        }
+        return lastEmitted
     }
 
     /// Extracts the trailing Bangla Unicode consonant/conjunct cluster from `queue` so `MoveL` (`র্` রেফ)

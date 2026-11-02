@@ -35,6 +35,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         GlobalKeyboardHook.shared.onToggleKeymapRequested = { [weak self] in
             self?.keymapOverlay.toggleVisibility()
         }
+        GlobalKeyboardHook.shared.onInterceptStudioKeyDown = { [weak self] event in
+            return self?.studioController.handleStudioKeyDown(event) ?? false
+        }
 
         setupMenuBarExtra()
         registerNotifications()

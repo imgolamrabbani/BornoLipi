@@ -59,36 +59,36 @@ public final class StudioWindowController: NSObject, NSTextViewDelegate {
         headerView.layer?.borderWidth = 1.0
         headerView.layer?.borderColor = NSColor(calibratedRed: 0.08, green: 0.24, blue: 0.18, alpha: 0.4).cgColor
 
-        let bannerImageView = NSImageView(frame: NSRect(x: 18, y: 6, width: 350, height: 76))
+        let bannerImageView = NSImageView(frame: NSRect(x: 16, y: 6, width: 320, height: 76))
         bannerImageView.imageScaling = .scaleProportionallyUpOrDown
         bannerImageView.image = loadAsset("bornolipi_header_banner")
         headerView.addSubview(bannerImageView)
 
         let editionTitle = NSTextField(labelWithString: "বর্ণলিপি • macOS Universal Engine")
-        editionTitle.font = NSFont.boldSystemFont(ofSize: 16)
+        editionTitle.font = NSFont.boldSystemFont(ofSize: 15)
         editionTitle.textColor = NSColor(calibratedRed: 0.05, green: 0.34, blue: 0.18, alpha: 1.0)
-        editionTitle.frame = NSRect(x: 380, y: 46, width: 320, height: 24)
+        editionTitle.frame = NSRect(x: 344, y: 46, width: 330, height: 24)
         headerView.addSubview(editionTitle)
 
         let shortcutSubtitle = NSTextField(
-            labelWithString: "F1 / Option+K: লেআউট চার্ট  •  Ctrl+Option+B (অথবা F12): মোড পরিবর্তন"
+            labelWithString: "F1 / Opt+K: লেআউট চার্ট • Ctrl+Opt+B (F12): মোড পরিবর্তন"
         )
-        shortcutSubtitle.font = NSFont.systemFont(ofSize: 12, weight: .medium)
+        shortcutSubtitle.font = NSFont.systemFont(ofSize: 11.5, weight: .medium)
         shortcutSubtitle.textColor = NSColor(calibratedWhite: 0.25, alpha: 1.0)
-        shortcutSubtitle.frame = NSRect(x: 380, y: 20, width: 420, height: 20)
+        shortcutSubtitle.frame = NSRect(x: 344, y: 20, width: 340, height: 20)
         headerView.addSubview(shortcutSubtitle)
 
         let splashBtn = NSButton(title: "🎨 About Canvas", target: self, action: #selector(splashClicked))
         splashBtn.bezelStyle = .rounded
         splashBtn.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
-        splashBtn.frame = NSRect(x: 690, y: 28, width: 125, height: 32)
+        splashBtn.frame = NSRect(x: 696, y: 28, width: 125, height: 32)
         splashBtn.autoresizingMask = [.minXMargin]
         headerView.addSubview(splashBtn)
 
         let keymapBtn = NSButton(title: "⌨️ Keymap (F1)", target: self, action: #selector(keymapClicked))
         keymapBtn.bezelStyle = .rounded
         keymapBtn.font = NSFont.boldSystemFont(ofSize: 12)
-        keymapBtn.frame = NSRect(x: 822, y: 28, width: 140, height: 32)
+        keymapBtn.frame = NSRect(x: 826, y: 28, width: 138, height: 32)
         keymapBtn.autoresizingMask = [.minXMargin]
         headerView.addSubview(keymapBtn)
 
@@ -261,8 +261,14 @@ public final class StudioWindowController: NSObject, NSTextViewDelegate {
             modeEmblemView.image = loadAsset("emblem_english")
         case .bijoyClassic:
             modeEmblemView.image = loadAsset("emblem_classic") ?? loadAsset("emblem_english")
+            if window.isKeyWindow {
+                window.makeFirstResponder(sutonnyTextView)
+            }
         case .bijoyUnicode:
             modeEmblemView.image = loadAsset("emblem_unicode") ?? loadAsset("emblem_english")
+            if window.isKeyWindow {
+                window.makeFirstResponder(unicodeTextView)
+            }
         }
 
         if GlobalKeyboardHook.shared.isHookActive {
@@ -286,11 +292,75 @@ public final class StudioWindowController: NSObject, NSTextViewDelegate {
         }
     }
 
+    /// Handles typing directly inside the Studio window's two scratchpad panes:
+    /// - When typing in the **Left (Unicode Bangla)** pane (and mode != English), it uses `.bijoyUnicode` so Unicode Bangla appears cleanly!
+    /// - When typing in the **Right (SutonnyMJ Bijoy Classic)** pane (and mode != English), it uses `.bijoyClassic` so SutonnyMJ ANSI appears cleanly!
+    public func handleStudioKeyDown(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let hasCmd = flags.contains(.command)
+        let hasCtrl = flags.contains(.control)
+        let hasOpt = flags.contains(.option)
+        let hasShift = flags.contains(.shift)
+        let keyCode = event.keyCode
+
+        if keyCode == 122 || (hasOpt && !hasCmd && !hasCtrl && keyCode == 40) {
+            onShowKeymap?()
+            return true
+        }
+        if keyCode == 111 || ((hasCtrl || hasCmd) && hasOpt && keyCode == 11) {
+            BijoyTypingEngine.shared.cycleMode()
+            return true
+        }
+        if hasCmd || hasCtrl || hasOpt {
+            return false
+        }
+        guard let textView = window.firstResponder as? NSTextView,
+              window.isKeyWindow else {
+            return false
+        }
+        let engine = BijoyTypingEngine.shared
+        guard engine.currentMode != .english else {
+            return false
+        }
+
+        let targetMode: TypingMode
+        if textView === unicodeTextView {
+            targetMode = .bijoyUnicode
+        } else if textView === sutonnyTextView {
+            targetMode = .bijoyClassic
+        } else {
+            targetMode = engine.currentMode
+        }
+
+        let action = engine.processKeyDown(macKeyCode: keyCode, isShiftPressed: hasShift, overrideMode: targetMode)
+        switch action {
+        case .passThrough:
+            return false
+        case .replace(let backspaces, let insertText):
+            let sel = textView.selectedRange()
+            let deleteStart = max(0, sel.location - backspaces)
+            let replaceRange = NSRange(location: deleteStart, length: sel.length + (sel.location - deleteStart))
+            if textView.shouldChangeText(in: replaceRange, replacementString: insertText) {
+                textView.replaceCharacters(in: replaceRange, with: insertText)
+                textView.didChangeText()
+            }
+            return true
+        }
+    }
+
     // MARK: - Actions
 
     @objc private func modePopUpChanged(_ sender: NSPopUpButton) {
         if let mode = TypingMode(rawValue: sender.indexOfSelectedItem) {
             BijoyTypingEngine.shared.currentMode = mode
+            switch mode {
+            case .bijoyClassic:
+                window.makeFirstResponder(sutonnyTextView)
+            case .bijoyUnicode:
+                window.makeFirstResponder(unicodeTextView)
+            case .english:
+                break
+            }
         }
     }
 

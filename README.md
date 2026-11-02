@@ -42,7 +42,7 @@ mkdir -p ~/Library/Fonts && unzip -j -o Fonts.zip -d ~/Library/Fonts/
 
 ---
 
-## 📦 Quick Download (Pre-Built `BornoLipi.app` Release)
+##  Quick Download (Pre-Built `BornoLipi.app` Release)
 
 You don't even need to compile from source! Download the ready-to-run macOS app directly from **[GitHub Releases](https://github.com/imgolamrabbani/BornoLipi/releases/latest)**:
 
@@ -58,7 +58,7 @@ You don't even need to compile from source! Download the ready-to-run macOS app 
 
 ---
 
-## ✨ Key Features
+##  Key Features
 
 - **Classic Metallic TopBar (`FloatingToolbarWindow`)**:
   - Inspired by the classic desktop Bangla keyboard bar—metallic dark-slate and emerald chassis with gold-bronze bevel trim, custom red-and-yellow **বর্ণলিপি বায়ান্নো** calligraphy wordmark (`topbar_wordmark.png`), custom mode emblems (`emblem_english.png`, `emblem_classic.png`, `emblem_unicode.png`), crisp white mode selector (`English` / `Bijoy Classic (SutonnyMJ)` / `Unicode (Bangla)`), tactile keyboard layout button, gear button, glossy status orb, and close button.

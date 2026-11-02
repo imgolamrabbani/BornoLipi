@@ -126,13 +126,14 @@ public final class GlobalKeyboardHook {
         isHookActive = false
     }
 
-    /// Installs an `NSEvent.addLocalMonitorForEvents` monitor for BornoLipi's own Studio window.
+    /// Installs an `NSEvent.addLocalMonitorForEvents` fallback ONLY when the global `CGEventTap` is not yet active.
     private func installLocalFallbackMonitor() {
         guard localKeyMonitor == nil else { return }
         localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self = self else { return event }
-            if let studioHandler = self.onInterceptStudioKeyDown, studioHandler(event) {
-                return nil
+            // When the global CGEventTap is active, it handles all apps uniformly (including BornoLipi).
+            if self.isHookActive {
+                return event
             }
             if self.handleLocalNSEvent(event) {
                 return nil
@@ -210,14 +211,7 @@ public final class GlobalKeyboardHook {
             return Unmanaged.passUnretained(event)
         }
 
-        // 4. If BornoLipi itself is the active frontmost app (e.g. the user is typing inside BornoLipi Studio),
-        //    let our local `NSEvent` monitor handle it directly so the left pane (Unicode) and right pane (SutonnyMJ)
-        //    each use their appropriate encoding!
-        if NSWorkspace.shared.frontmostApplication?.bundleIdentifier == Bundle.main.bundleIdentifier {
-            return Unmanaged.passUnretained(event)
-        }
-
-        // 5. Run BijoyTypingEngine for the active mode across all external macOS apps (Microsoft Word, Chrome, Notes, etc.)
+        // 4. Run BijoyTypingEngine for the active mode universally across ALL macOS apps (Microsoft Word, Chrome, Notes, and BornoLipi)
         let action = BijoyTypingEngine.shared.processKeyDown(macKeyCode: keyCode, isShiftPressed: hasShift)
         switch action {
         case .passThrough:
